@@ -1,3 +1,4 @@
+import { useObservableAsValue } from 'partytracks/react'
 import { useEffect, useRef, useState } from 'react'
 import type { DeadTrackInfo } from '~/routes/api.deadTrack'
 import populateTraceLink from '~/utils/populateTraceLink'
@@ -11,34 +12,42 @@ export function useDeadPulledTrackMonitor(
 	name?: string
 ) {
 	const [deadTrack, setDeadTrack] = useState(false)
-	const { peer, traceLink, room, feedbackEnabled } = useRoomContext()
-	const timeoutRef = useRef(-1)
+	const { partyTracks, traceLink, room, feedbackEnabled } = useRoomContext()
+	const peerConnection = useObservableAsValue(partyTracks.peerConnection$)
+	const intervalRef = useRef(-1)
+	const bytesRef = useRef(0)
 
 	useEffect(() => {
-		if (!peer || !track || !enabled || deadTrack || !feedbackEnabled) return
-		timeoutRef.current = window.setTimeout(() => {
-			peer.pc.getStats(track).then((report) => {
+		if (!peerConnection || !track || !enabled || deadTrack || !feedbackEnabled)
+			return
+		intervalRef.current = window.setInterval(() => {
+			peerConnection.getStats(track).then((report) => {
 				// this means component has unmounted
-				if (timeoutRef.current === -1) return
+				if (intervalRef.current === -1) return
 				const stat = [...report.values()].find(
 					(s) => s.trackIdentifier === track.id
 				)
-				if (stat?.bytesReceived === 0) {
-					setDeadTrack(true)
+				if (stat.type !== 'inbound-rtp') return
+				if (stat?.bytesReceived !== undefined) {
+					if (bytesRef.current === stat.bytesReceived) {
+						setDeadTrack(true)
+					} else {
+						bytesRef.current = stat.bytesReceived
+					}
 				}
 			})
 		}, 10000)
 
 		return () => {
-			clearTimeout(timeoutRef.current)
+			clearInterval(intervalRef.current)
 			// reset this to -1 for the check above
-			timeoutRef.current = -1
+			intervalRef.current = -1
 		}
-	}, [deadTrack, enabled, feedbackEnabled, peer, track])
+	}, [deadTrack, enabled, feedbackEnabled, partyTracks, peerConnection, track])
 
 	useEffect(() => {
-		if (!peer?.sessionId || !deadTrack || !feedbackEnabled) return
-		const pullSessionTrace = populateTraceLink(peer.sessionId, traceLink)
+		if (!sessionId || !deadTrack || !feedbackEnabled) return
+		const pullSessionTrace = populateTraceLink(sessionId, traceLink)
 		const [pushedSessionId, trackId] = trackInfo?.split('/') ?? []
 		const pushedSessionTrace = populateTraceLink(pushedSessionId, traceLink)
 
@@ -49,6 +58,7 @@ export function useDeadPulledTrackMonitor(
 				trackId,
 				pullingUser: room.identity?.name,
 				pushingUser: name,
+				meetingId: room.roomState.meetingId,
 			}
 			fetch('/api/deadTrack', {
 				method: 'POST',
@@ -57,11 +67,12 @@ export function useDeadPulledTrackMonitor(
 		}
 	}, [
 		deadTrack,
+		peerConnection,
 		feedbackEnabled,
 		name,
-		peer?.sessionId,
-		room.identity?.name,
 		sessionId,
+		room.identity?.name,
+		room.roomState.meetingId,
 		traceLink,
 		trackInfo,
 	])

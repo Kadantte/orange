@@ -1,42 +1,45 @@
-import { useEffect, useState } from 'react'
-import type { PeerDebugInfo } from '~/utils/Peer.client'
-import Peer from '~/utils/Peer.client'
+import {
+	PartyTracks,
+	setLogLevel,
+	type PartyTracksConfig,
+} from 'partytracks/client'
+import { useObservableAsValue } from 'partytracks/react'
+import { useEffect, useMemo, useState } from 'react'
 import { useStablePojo } from './useStablePojo'
 
-export const usePeerConnection = (config: {
-	apiExtraParams?: string
-	iceServers?: RTCIceServer[]
-}) => {
-	const [peer, setPeer] = useState<Peer | null>(null)
-	const [debugInfo, setDebugInfo] = useState<PeerDebugInfo>()
+setLogLevel('debug')
+
+export const usePeerConnection = (config: PartyTracksConfig) => {
+	const stableConfig = useStablePojo(config)
+	const partyTracks = useMemo(
+		() => new PartyTracks(stableConfig),
+		[stableConfig]
+	)
+	const peerConnection = useObservableAsValue(partyTracks.peerConnection$)
+
 	const [iceConnectionState, setIceConnectionState] =
 		useState<RTCIceConnectionState>('new')
 
-	const stableConfig = useStablePojo(config)
-
 	useEffect(() => {
-		const p = new Peer(stableConfig)
-		setPeer(p)
-		const debugHandler = () => {
-			setDebugInfo(p.getDebugInfo())
-		}
+		if (!peerConnection) return
+		setIceConnectionState(peerConnection.iceConnectionState)
 		const iceConnectionStateChangeHandler = () => {
-			setIceConnectionState(p.pc.iceConnectionState)
+			setIceConnectionState(peerConnection.iceConnectionState)
 		}
-		p.pc.addEventListener(
+		peerConnection.addEventListener(
 			'iceconnectionstatechange',
 			iceConnectionStateChangeHandler
 		)
-		p.history.addEventListener('logentry', debugHandler)
 		return () => {
-			p.history.removeEventListener('logentry', debugHandler)
-			p.pc.removeEventListener(
+			peerConnection.removeEventListener(
 				'connectionstatechange',
 				iceConnectionStateChangeHandler
 			)
-			p.destroy()
 		}
-	}, [stableConfig])
+	}, [peerConnection])
 
-	return { peer, debugInfo, iceConnectionState }
+	return {
+		partyTracks,
+		iceConnectionState,
+	}
 }

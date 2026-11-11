@@ -7,6 +7,7 @@ export default function useMediaDevices(
 	filter: (device: MediaDeviceInfo) => boolean = () => true
 ) {
 	const [devices, setDevices] = useMediaDevicesState()
+	const filterSource = filter.toString()
 
 	useEffect(() => {
 		let mounted = true
@@ -21,7 +22,7 @@ export default function useMediaDevices(
 			mounted = false
 			navigator.mediaDevices.removeEventListener('devicechange', requestDevices)
 		}
-	}, [])
+	}, [filterSource, setDevices])
 
 	return devices.filter(filter)
 }

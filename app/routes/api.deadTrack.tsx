@@ -1,6 +1,8 @@
 import type { ActionFunctionArgs } from '@remix-run/cloudflare'
 import { json } from '@remix-run/cloudflare'
 import type { ChatCard } from '~/types/GoogleChatApi'
+import { RELEASE } from '~/utils/constants'
+import { dashboardLogsLink } from '~/utils/dashboardLogsLink'
 
 export type DeadTrackInfo = {
 	pullSessionTrace: string
@@ -8,10 +10,11 @@ export type DeadTrackInfo = {
 	trackId: string
 	pullingUser?: string
 	pushingUser?: string
+	meetingId?: string
 }
 
 export const action = async ({ request, context }: ActionFunctionArgs) => {
-	if (!context.FEEDBACK_URL || !context.FEEDBACK_QUEUE) {
+	if (!context.env.FEEDBACK_URL || !context.env.FEEDBACK_QUEUE) {
 		throw new Response('not found', { status: 404 })
 	}
 	const info: DeadTrackInfo = await request.json()
@@ -21,7 +24,41 @@ export const action = async ({ request, context }: ActionFunctionArgs) => {
 		trackId,
 		pullingUser,
 		pushingUser,
+		meetingId,
 	} = info
+
+	const { hostname } = new URL(request.url)
+
+	let dashboardLink = ''
+
+	if (meetingId && context.env.DASHBOARD_WORKER_URL) {
+		dashboardLink = dashboardLogsLink(context.env.DASHBOARD_WORKER_URL, [
+			{
+				id: '2',
+				key: 'meetingId',
+				type: 'string',
+				value: meetingId,
+				operation: 'eq',
+			},
+		])
+		const dashboardLogsParams = new URLSearchParams({
+			view: 'events',
+			needle: JSON.stringify({ value: '', matchCase: false, isRegex: false }),
+			filters: JSON.stringify([
+				{
+					id: '2',
+					key: 'meetingId',
+					type: 'string',
+					value: meetingId,
+					operation: 'eq',
+				},
+			]),
+		})
+
+		dashboardLink =
+			context.env.DASHBOARD_WORKER_URL +
+			`/observability/logs?${dashboardLogsParams}`
+	}
 
 	const chatCard: ChatCard = {
 		cardsV2: [
@@ -29,8 +66,8 @@ export const action = async ({ request, context }: ActionFunctionArgs) => {
 				cardId: 'orange-meets-dead-track-card',
 				card: {
 					header: {
-						title: `💀 Dead track detected`,
-						subtitle: `${pullingUser} had issue pulling from ${pushingUser}`,
+						title: `💀 Dead track: ${pullingUser} had issue pulling from ${pushingUser}`,
+						subtitle: `Time: ${new Date().toISOString()} Environment: ${hostname} commit: ${RELEASE}`,
 						imageUrl:
 							'https://developers.google.com/chat/images/quickstart-app-avatar.png',
 						imageType: 'CIRCLE',
@@ -75,13 +112,37 @@ export const action = async ({ request, context }: ActionFunctionArgs) => {
 							],
 							collapsible: false,
 						},
+						...(dashboardLink
+							? [
+									{
+										header: 'Dashboard link',
+										widgets: [
+											{
+												buttonList: {
+													buttons: [
+														{
+															text: 'Dashboard logs',
+															onClick: {
+																openLink: {
+																	url: dashboardLink,
+																},
+															},
+														},
+													],
+												},
+											},
+										],
+										collapsible: false,
+									},
+								]
+							: []),
 					],
 				},
 			},
 		],
 	}
 
-	await context.FEEDBACK_QUEUE.send(chatCard)
+	await context.env.FEEDBACK_QUEUE.send(chatCard)
 
 	return json({
 		status: 'ok',

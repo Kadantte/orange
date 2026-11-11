@@ -1,7 +1,8 @@
+import { VisuallyHidden } from '@radix-ui/react-visually-hidden'
 import type { FC } from 'react'
 import { useRoomContext } from '~/hooks/useRoomContext'
 import { useUserMetadata } from '~/hooks/useUserMetadata'
-import type { User } from '~/types/Messages'
+import type { ClientMessage, User } from '~/types/Messages'
 import AlertDialog from './AlertDialog'
 import type { ButtonProps } from './Button'
 import { Button } from './Button'
@@ -21,6 +22,20 @@ export const MuteUserButton: FC<MuteUserButtonProps> = ({
 }) => {
 	const { room } = useRoomContext()
 	const { data } = useUserMetadata(user.name)
+
+	if (user.tracks.audioUnavailable) {
+		return (
+			<Tooltip content="Mic is unavailable. User cannot unmute.">
+				<Button disabled displayType="secondary">
+					<Icon type="micOff" className="text-red-700 dark:text-red-400" />
+					<VisuallyHidden>
+						User's mic is unavailable, cannot unmute.
+					</VisuallyHidden>
+				</Button>
+			</Tooltip>
+		)
+	}
+
 	return (
 		<AlertDialog.Root>
 			{user.tracks.audioEnabled ? (
@@ -62,10 +77,12 @@ export const MuteUserButton: FC<MuteUserButtonProps> = ({
 						<AlertDialog.Action asChild>
 							<Button
 								onClick={() => {
-									room.signal.sendMessage({
-										type: 'muteUser',
-										id: user.id,
-									})
+									room.websocket.send(
+										JSON.stringify({
+											type: 'muteUser',
+											id: user.id,
+										} satisfies ClientMessage)
+									)
 								}}
 								className="text-sm"
 								displayType="danger"

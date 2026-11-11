@@ -1,6 +1,7 @@
 node_modules
 .DS_STORE
 .wrangler
+.drizzle.env
 
 /.cache
 /build
@@ -10,3 +11,9 @@ node_modules
 .env
 .dev.vars
 .sentryclirc
+
+playwright-report
+test-results
+
+.yalc
+yalc.lock

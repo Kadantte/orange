@@ -1,3 +1,6 @@
+import { type ApiHistoryEntry } from 'partytracks/client'
+import type { TrackObject } from '~/utils/callsTypes'
+
 export type User = {
 	id: string
 	name: string
@@ -8,6 +11,7 @@ export type User = {
 	tracks: {
 		audio?: string
 		audioEnabled?: boolean
+		audioUnavailable: boolean
 		video?: string
 		videoEnabled?: boolean
 		screenshare?: string
@@ -16,7 +20,14 @@ export type User = {
 }
 
 export type RoomState = {
+	meetingId?: string
 	users: User[]
+	ai: {
+		enabled: boolean
+		controllingUser?: string
+		error?: string
+		connectionPending?: boolean
+	}
 }
 
 export type ServerMessage =
@@ -29,10 +40,6 @@ export type ServerMessage =
 			error?: string
 	  }
 	| {
-			type: 'identity'
-			id: string
-	  }
-	| {
 			type: 'directMessage'
 			from: string
 			message: string
@@ -40,12 +47,17 @@ export type ServerMessage =
 	| {
 			type: 'muteMic'
 	  }
-
-export type MessageFromServer = {
-	from: string
-	timestamp: number
-	message: ServerMessage
-}
+	| {
+			type: 'partyserver-pong'
+	  }
+	| {
+			type: 'e2eeMlsMessage'
+			payload: string
+	  }
+	| {
+			type: 'userLeftNotification'
+			id: string
+	  }
 
 export type ClientMessage =
 	| {
@@ -65,5 +77,32 @@ export type ClientMessage =
 			type: 'userLeft'
 	  }
 	| {
-			type: 'heartBeat'
+			type: 'partyserver-ping'
+	  }
+	| {
+			type: 'heartbeat'
+	  }
+	| {
+			type: 'enableAi'
+			instructions?: string
+			voice?: string
+	  }
+	| {
+			type: 'disableAi'
+	  }
+	| {
+			type: 'requestAiControl'
+			track: TrackObject
+	  }
+	| {
+			type: 'relenquishAiControl'
+	  }
+	| {
+			type: 'callsApiHistoryEntry'
+			entry: ApiHistoryEntry
+			sessionId?: string
+	  }
+	| {
+			type: 'e2eeMlsMessage'
+			payload: string
 	  }

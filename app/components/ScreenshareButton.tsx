@@ -4,22 +4,19 @@ import { useEffect, useState } from 'react'
 import { useRoomContext } from '~/hooks/useRoomContext'
 import { Button } from './Button'
 import { Icon } from './Icon/Icon'
-import { Tooltip } from './Tooltip'
 
 interface ScreenshareButtonProps {}
 
 export const ScreenshareButton: FC<ScreenshareButtonProps> = () => {
 	const {
-		userMedia: { screenShareVideoTrack, startScreenShare, endScreenShare },
+		userMedia: { startScreenShare, endScreenShare, screenShareEnabled },
 	} = useRoomContext()
-
-	const sharing = screenShareVideoTrack !== undefined
 
 	const [canShareScreen, setCanShareScreen] = useState(true)
 
 	// setting this in a useEffect because we need to do this feature
 	// detection to remove it for iOS, but the feature detection also
-	//  doesn't work on the server, so it causes a mismatch between
+	// doesn't work on the server, so it causes a mismatch between
 	// the server/client that React doesn't like
 	useEffect(() => {
 		setCanShareScreen(
@@ -31,14 +28,12 @@ export const ScreenshareButton: FC<ScreenshareButtonProps> = () => {
 	if (!canShareScreen) return null
 
 	return (
-		<Tooltip content={sharing ? 'Stop sharing' : 'Share screen'}>
-			<Button
-				displayType={sharing ? 'danger' : 'secondary'}
-				onClick={sharing ? endScreenShare : startScreenShare}
-			>
-				<VisuallyHidden>Share screen</VisuallyHidden>
-				<Icon type="screenshare" />
-			</Button>
-		</Tooltip>
+		<Button
+			displayType={screenShareEnabled ? 'danger' : 'secondary'}
+			onClick={screenShareEnabled ? endScreenShare : startScreenShare}
+		>
+			<VisuallyHidden>Share screen</VisuallyHidden>
+			<Icon type="screenshare" />
+		</Button>
 	)
 }

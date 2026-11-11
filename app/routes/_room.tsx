@@ -1,52 +1,96 @@
 import type { LoaderFunctionArgs } from '@remix-run/cloudflare'
 import { json } from '@remix-run/cloudflare'
 import { Outlet, useLoaderData, useParams } from '@remix-run/react'
+import { useObservableAsValue, useValueAsObservable } from 'partytracks/react'
 import { useMemo, useState } from 'react'
+import { of } from 'rxjs'
 import invariant from 'tiny-invariant'
 import { EnsureOnline } from '~/components/EnsureOnline'
 import { EnsurePermissions } from '~/components/EnsurePermissions'
 import { Icon } from '~/components/Icon/Icon'
+import { Spinner } from '~/components/Spinner'
 
+import { useE2eeStatus } from '~/hooks/useE2eeStatus'
 import { usePeerConnection } from '~/hooks/usePeerConnection'
-import usePushedTrack from '~/hooks/usePushedTrack'
 import useRoom from '~/hooks/useRoom'
-import type { RoomContextType } from '~/hooks/useRoomContext'
+import { type RoomContextType } from '~/hooks/useRoomContext'
+import { useRoomHistory } from '~/hooks/useRoomHistory'
+import { useStablePojo } from '~/hooks/useStablePojo'
 import useUserMedia from '~/hooks/useUserMedia'
+import type { TrackObject } from '~/utils/callsTypes'
+import {
+	DEFAULT_SAFETY_NUMBER_LENGTH,
+	MAX_SAFETY_NUMBER_LENGTH,
+	MIN_SAFETY_NUMBER_LENGTH,
+	useE2EE,
+} from '~/utils/e2ee'
 import { getIceServers } from '~/utils/getIceServers.server'
+import { mode } from '~/utils/mode'
 
 function numberOrUndefined(value: unknown): number | undefined {
 	const num = Number(value)
 	return isNaN(num) ? undefined : num
 }
 
+function parseSafetyNumberLength(value: string | undefined): number {
+	const num = numberOrUndefined(value)
+	if (!value?.trim() || num === undefined || !Number.isInteger(num)) {
+		return DEFAULT_SAFETY_NUMBER_LENGTH
+	}
+	return Math.min(
+		Math.max(num, MIN_SAFETY_NUMBER_LENGTH),
+		MAX_SAFETY_NUMBER_LENGTH
+	)
+}
+
+function trackObjectToString(trackObject?: TrackObject) {
+	if (!trackObject) return undefined
+	return trackObject.sessionId + '/' + trackObject.trackName
+}
+
 export const loader = async ({ context }: LoaderFunctionArgs) => {
 	const {
-		mode,
-		TRACE_LINK,
-		API_EXTRA_PARAMS,
-		MAX_WEBCAM_FRAMERATE,
-		MAX_WEBCAM_BITRATE,
-		MAX_WEBCAM_QUALITY_LEVEL,
+		env: {
+			TRACE_LINK,
+			API_EXTRA_PARAMS,
+			MAX_WEBCAM_FRAMERATE,
+			MAX_WEBCAM_BITRATE,
+			MAX_WEBCAM_QUALITY_LEVEL,
+			MAX_API_HISTORY,
+			EXPERIMENTAL_SIMULCAST_ENABLED,
+		},
 	} = context
 
 	return json({
-		mode,
-		userDirectoryUrl: context.USER_DIRECTORY_URL,
+		userDirectoryUrl: context.env.USER_DIRECTORY_URL,
 		traceLink: TRACE_LINK,
 		apiExtraParams: API_EXTRA_PARAMS,
-		iceServers: await getIceServers(context),
-		feedbackEnabled:
-			context.FEEDBACK_QUEUE !== undefined &&
-			context.FEEDBACK_URL !== undefined,
+		iceServers: await getIceServers(context.env),
+		feedbackEnabled: Boolean(
+			context.env.FEEDBACK_URL &&
+				context.env.FEEDBACK_QUEUE &&
+				context.env.FEEDBACK_STORAGE
+		),
 		maxWebcamFramerate: numberOrUndefined(MAX_WEBCAM_FRAMERATE),
 		maxWebcamBitrate: numberOrUndefined(MAX_WEBCAM_BITRATE),
 		maxWebcamQualityLevel: numberOrUndefined(MAX_WEBCAM_QUALITY_LEVEL),
+		maxApiHistory: numberOrUndefined(MAX_API_HISTORY),
+		simulcastEnabled: EXPERIMENTAL_SIMULCAST_ENABLED === 'true',
+		e2eeEnabled: context.env.E2EE_ENABLED === 'true',
+		e2eeSafetyNumberLength: parseSafetyNumberLength(
+			context.env.E2EE_SAFETY_NUMBER_LENGTH
+		),
 	})
 }
 
 export default function RoomWithPermissions() {
+	const [micDeviceId, setMicDeviceId] = useState<string>()
+	const [cameraDeviceId, setCameraDeviceId] = useState<string>()
 	return (
-		<EnsurePermissions>
+		<EnsurePermissions
+			onCameraSelected={setCameraDeviceId}
+			onMicSelected={setMicDeviceId}
+		>
 			<EnsureOnline
 				fallback={
 					<div className="grid h-full place-items-center">
@@ -59,90 +103,183 @@ export default function RoomWithPermissions() {
 					</div>
 				}
 			>
-				<Room />
+				<RoomPreparation
+					micDeviceId={micDeviceId}
+					cameraDeviceId={cameraDeviceId}
+				/>
 			</EnsureOnline>
 		</EnsurePermissions>
 	)
 }
 
+function RoomPreparation(props: {
+	micDeviceId?: string
+	cameraDeviceId?: string
+}) {
+	const { roomName } = useParams()
+	invariant(roomName)
+	const userMedia = useUserMedia(props)
+	const room = useRoom({ roomName, userMedia })
+
+	return room.roomState.meetingId ? (
+		<Room room={room} userMedia={userMedia} />
+	) : (
+		<div className="grid place-items-center h-full">
+			<Spinner className="text-gray-500" />
+		</div>
+	)
+}
+
 function tryToGetDimensions(videoStreamTrack?: MediaStreamTrack) {
-	if (
-		videoStreamTrack === undefined ||
-		// TODO: Determine a better way to get dimensions in Firefox
-		// where this isn't API isn't supported. For now, Firefox will
-		// just not be constrained and scaled down by dimension scaling
-		// but the bandwidth and framerate constraints will still apply
-		// https://caniuse.com/?search=getCapabilities
-		videoStreamTrack.getCapabilities === undefined
-	) {
+	if (videoStreamTrack === undefined) {
 		return { height: 0, width: 0 }
 	}
-	const height = videoStreamTrack?.getCapabilities().height?.max ?? 0
-	const width = videoStreamTrack?.getCapabilities().width?.max ?? 0
-
+	const height = videoStreamTrack?.getSettings().height ?? 0
+	const width = videoStreamTrack?.getSettings().width ?? 0
 	return { height, width }
 }
 
-function Room() {
+interface RoomProps {
+	room: ReturnType<typeof useRoom>
+	userMedia: ReturnType<typeof useUserMedia>
+}
+
+function Room({ room, userMedia }: RoomProps) {
 	const [joined, setJoined] = useState(false)
+	const [dataSaverMode, setDataSaverMode] = useState(false)
+	const [audioOnlyMode, setAudioOnlyMode] = useState(false)
 	const { roomName } = useParams()
 	invariant(roomName)
 
 	const {
-		mode,
 		userDirectoryUrl,
 		traceLink,
 		feedbackEnabled,
 		apiExtraParams,
 		iceServers,
-		maxWebcamBitrate = 1_200_000,
+		maxWebcamBitrate = 2_500_000,
 		maxWebcamFramerate = 24,
 		maxWebcamQualityLevel = 1080,
+		maxApiHistory = 100,
+		simulcastEnabled,
+		e2eeEnabled,
+		e2eeSafetyNumberLength,
 	} = useLoaderData<typeof loader>()
 
-	const userMedia = useUserMedia(mode)
-	const room = useRoom({ roomName, userMedia })
-	const { peer, debugInfo, iceConnectionState } = usePeerConnection({
-		apiExtraParams,
+	const params = new URLSearchParams(apiExtraParams)
+
+	invariant(room.roomState.meetingId, 'Meeting ID cannot be missing')
+	params.set('correlationId', room.roomState.meetingId)
+
+	const { partyTracks, iceConnectionState } = usePeerConnection({
+		maxApiHistory,
+		apiExtraParams: params.toString(),
 		iceServers,
 	})
+	const roomHistory = useRoomHistory(partyTracks, room)
 
 	const scaleResolutionDownBy = useMemo(() => {
+		if (dataSaverMode) return 4
 		const videoStreamTrack = userMedia.videoStreamTrack
 		const { height, width } = tryToGetDimensions(videoStreamTrack)
 		// we need to do this in case camera is in portrait mode
 		const smallestDimension = Math.min(height, width)
 		return Math.max(smallestDimension / maxWebcamQualityLevel, 1)
-	}, [maxWebcamQualityLevel, userMedia.videoStreamTrack])
+	}, [maxWebcamQualityLevel, userMedia.videoStreamTrack, dataSaverMode])
 
-	const pushedVideoTrack = usePushedTrack(peer, userMedia.videoStreamTrack, {
-		maxFramerate: maxWebcamFramerate,
-		maxBitrate: maxWebcamBitrate,
-		scaleResolutionDownBy,
-	})
-	const pushedAudioTrack = usePushedTrack(peer, userMedia.audioStreamTrack, {
-		priority: 'high',
-	})
-	const pushedScreenSharingTrack = usePushedTrack(
-		peer,
-		userMedia.screenShareVideoTrack
+	const sendEncodings = useStablePojo<RTCRtpEncodingParameters[]>(
+		simulcastEnabled
+			? [
+					{
+						rid: 'a',
+						maxBitrate: 1_300_000,
+						maxFramerate: 30.0,
+						active: !dataSaverMode,
+					},
+					{
+						rid: 'b',
+						scaleResolutionDownBy: 2.0,
+						maxBitrate: 500_000,
+						maxFramerate: 24.0,
+						active: true,
+					},
+				]
+			: [
+					{
+						maxFramerate: maxWebcamFramerate,
+						maxBitrate: maxWebcamBitrate,
+						scaleResolutionDownBy,
+					},
+				]
 	)
+	const sendEncodings$ = useValueAsObservable(sendEncodings)
+
+	const pushedVideoTrack$ = useMemo(
+		() =>
+			partyTracks.push(userMedia.videoTrack$, {
+				sendEncodings$,
+			}),
+		[partyTracks, userMedia.videoTrack$, sendEncodings$]
+	)
+
+	const pushedVideoTrack = useObservableAsValue(pushedVideoTrack$)
+
+	const pushedAudioTrack$ = useMemo(
+		() =>
+			partyTracks.push(userMedia.publicAudioTrack$, {
+				sendEncodings$: of([{ networkPriority: 'high' }]),
+			}),
+		[partyTracks, userMedia.publicAudioTrack$]
+	)
+	const pushedAudioTrack = useObservableAsValue(pushedAudioTrack$)
+
+	const pushedScreenSharingTrack$ = useMemo(
+		() => partyTracks.push(userMedia.screenShareVideoTrack$),
+		[partyTracks, userMedia.screenShareVideoTrack$]
+	)
+	const pushedScreenSharingTrack = useObservableAsValue(
+		pushedScreenSharingTrack$
+	)
+	const [pinnedTileIds, setPinnedTileIds] = useState<string[]>([])
+	const [showDebugInfo, setShowDebugInfo] = useState(mode !== 'production')
+
+	const { e2eeGroupState, onJoin } = useE2EE({
+		enabled: e2eeEnabled,
+		safetyNumberLength: e2eeSafetyNumberLength,
+		room,
+		partyTracks,
+	})
+	const e2ee = useE2eeStatus(e2eeGroupState, [
+		room.websocket.id,
+		...room.otherUsers.map((u) => u.id),
+	])
 
 	const context: RoomContextType = {
 		joined,
 		setJoined,
+		pinnedTileIds,
+		setPinnedTileIds,
+		showDebugInfo,
+		setShowDebugInfo,
+		dataSaverMode,
+		setDataSaverMode,
+		audioOnlyMode,
+		setAudioOnlyMode,
 		traceLink,
 		userMedia,
 		userDirectoryUrl,
 		feedbackEnabled,
-		peer,
-		peerDebugInfo: debugInfo,
+		partyTracks,
+		roomHistory,
+		e2ee,
+		e2eeOnJoin: onJoin,
 		iceConnectionState,
 		room,
+		simulcastEnabled,
 		pushedTracks: {
-			video: pushedVideoTrack,
-			audio: pushedAudioTrack,
-			screenshare: pushedScreenSharingTrack,
+			video: trackObjectToString(pushedVideoTrack),
+			audio: trackObjectToString(pushedAudioTrack),
+			screenshare: trackObjectToString(pushedScreenSharingTrack),
 		},
 	}
 

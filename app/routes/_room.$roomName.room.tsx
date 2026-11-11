@@ -1,31 +1,37 @@
 import type { LoaderFunctionArgs } from '@remix-run/cloudflare'
 import { json } from '@remix-run/cloudflare'
-import { useLoaderData, useNavigate, useParams } from '@remix-run/react'
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
-import { Flipper } from 'react-flip-toolkit'
-import { useMeasure, useMount, useWindowSize } from 'react-use'
-import { Button } from '~/components/Button'
+import {
+	useLoaderData,
+	useNavigate,
+	useParams,
+	useSearchParams,
+} from '@remix-run/react'
+import { useEffect, useState } from 'react'
+import { useMount, useWindowSize } from 'react-use'
+import { AiButton } from '~/components/AiButton'
+import { ButtonLink } from '~/components/Button'
 import { CameraButton } from '~/components/CameraButton'
+import { CopyButton } from '~/components/CopyButton'
 import { HighPacketLossWarningsToast } from '~/components/HighPacketLossWarningsToast'
 import { IceDisconnectedToast } from '~/components/IceDisconnectedToast'
-import { Icon } from '~/components/Icon/Icon'
 import { LeaveRoomButton } from '~/components/LeaveRoomButton'
 import { MicButton } from '~/components/MicButton'
 import { OverflowMenu } from '~/components/OverflowMenu'
-import { Participant } from '~/components/Participant'
+import { ParticipantLayout } from '~/components/ParticipantLayout'
 import { ParticipantsButton } from '~/components/ParticipantsMenu'
 import { PullAudioTracks } from '~/components/PullAudioTracks'
-import { PullVideoTrack } from '~/components/PullVideoTrack'
 import { RaiseHandButton } from '~/components/RaiseHandButton'
+import { SafetyNumberToast } from '~/components/SafetyNumberToast'
 import { ScreenshareButton } from '~/components/ScreenshareButton'
-import Toast from '~/components/Toast'
+import Toast, { useDispatchToast } from '~/components/Toast'
 import useBroadcastStatus from '~/hooks/useBroadcastStatus'
 import useIsSpeaking from '~/hooks/useIsSpeaking'
 import { useRoomContext } from '~/hooks/useRoomContext'
+import { useShowDebugInfoShortcut } from '~/hooks/useShowDebugInfoShortcut'
 import useSounds from '~/hooks/useSounds'
 import useStageManager from '~/hooks/useStageManager'
 import { useUserJoinLeaveToasts } from '~/hooks/useUserJoinLeaveToasts'
-import { calculateLayout } from '~/utils/calculateLayout'
+import { dashboardLogsLink } from '~/utils/dashboardLogsLink'
 import getUsername from '~/utils/getUsername.server'
 import isNonNullable from '~/utils/isNonNullable'
 
@@ -34,80 +40,35 @@ export const loader = async ({ request, context }: LoaderFunctionArgs) => {
 
 	return json({
 		username,
-		bugReportsEnabled: Boolean(context.FEEDBACK_QUEUE && context.FEEDBACK_URL),
+		bugReportsEnabled: Boolean(
+			context.env.FEEDBACK_URL &&
+				context.env.FEEDBACK_QUEUE &&
+				context.env.FEEDBACK_STORAGE
+		),
+		disableLobbyEnforcement: context.env.DISABLE_LOBBY_ENFORCEMENT === 'true',
 		mode: context.mode,
+		hasDb: Boolean(context.env.DB),
+		hasAiCredentials: Boolean(
+			context.env.OPENAI_API_TOKEN && context.env.OPENAI_MODEL_ENDPOINT
+		),
+		dashboardDebugLogsBaseUrl: context.env.DASHBOARD_WORKER_URL,
 	})
-}
-
-function useGridDebugControls(
-	{
-		initialCount,
-		defaultEnabled,
-	}: {
-		initialCount: number
-		defaultEnabled: boolean
-	} = { initialCount: 0, defaultEnabled: false }
-) {
-	const [enabled, setEnabled] = useState(defaultEnabled)
-	const [fakeUsers, setFakeUsers] = useState<string[]>(
-		Array.from({ length: initialCount }).map(() => crypto.randomUUID())
-	)
-
-	useEffect(() => {
-		const handler = (e: KeyboardEvent) => {
-			if (e.key.toLowerCase() === 'd' && e.ctrlKey) {
-				e.preventDefault()
-				setEnabled(!enabled)
-			}
-		}
-		document.addEventListener('keypress', handler)
-
-		return () => {
-			document.removeEventListener('keypress', handler)
-		}
-	}, [enabled])
-
-	const GridDebugControls = useCallback(
-		() =>
-			enabled ? (
-				<>
-					<Button
-						onClick={() => setFakeUsers((fu) => [...fu, crypto.randomUUID()])}
-					>
-						<Icon type="PlusIcon" />
-					</Button>
-					<Button
-						onClick={() => {
-							setFakeUsers((fu) => {
-								const randomLeaver = fu[Math.floor(Math.random() * fu.length)]
-								return fu.filter((x) => x !== randomLeaver)
-							})
-						}}
-					>
-						<Icon type="MinusIcon" />
-					</Button>
-				</>
-			) : null,
-		[enabled]
-	)
-
-	return {
-		GridDebugControls,
-		fakeUsers,
-	}
 }
 
 export default function Room() {
 	const { joined } = useRoomContext()
 	const navigate = useNavigate()
 	const { roomName } = useParams()
-	const { mode, bugReportsEnabled } = useLoaderData<typeof loader>()
+	const { mode, bugReportsEnabled, disableLobbyEnforcement } =
+		useLoaderData<typeof loader>()
+	const [search] = useSearchParams()
 
 	useEffect(() => {
-		if (!joined && mode !== 'development') navigate(`/${roomName}`)
-	}, [joined, mode, navigate, roomName])
+		if (!joined && mode !== 'development' && !disableLobbyEnforcement)
+			navigate(`/${roomName}${search.size > 0 ? '?' + search.toString() : ''}`)
+	}, [joined, mode, navigate, roomName, search, disableLobbyEnforcement])
 
-	if (!joined && mode !== 'development') return null
+	if (!joined && mode !== 'development' && !disableLobbyEnforcement) return null
 
 	return (
 		<Toast.Provider>
@@ -117,24 +78,33 @@ export default function Room() {
 }
 
 function JoinedRoom({ bugReportsEnabled }: { bugReportsEnabled: boolean }) {
+	const { hasDb, hasAiCredentials, dashboardDebugLogsBaseUrl } =
+		useLoaderData<typeof loader>()
 	const {
 		userMedia,
-		peer,
+		partyTracks,
 		pushedTracks,
-		room: { otherUsers, signal, identity },
+		showDebugInfo,
+		pinnedTileIds,
+		room,
+		e2ee,
+		e2eeOnJoin,
 	} = useRoomContext()
+	const {
+		otherUsers,
+		websocket,
+		identity,
+		roomState: { meetingId },
+	} = room
 
-	const { GridDebugControls, fakeUsers } = useGridDebugControls({
-		defaultEnabled: false,
-		initialCount: 0,
-	})
+	// only want this evaluated once upon mounting
+	const [firstUser] = useState(otherUsers.length === 0)
 
-	const [containerRef, { width: containerWidth, height: containerHeight }] =
-		useMeasure<HTMLDivElement>()
-	const [firstFlexChildRef, { width: firstFlexChildWidth }] =
-		useMeasure<HTMLDivElement>()
+	useEffect(() => {
+		e2eeOnJoin(firstUser)
+	}, [e2eeOnJoin, firstUser])
 
-	const totalUsers = 1 + fakeUsers.length + otherUsers.length
+	useShowDebugInfoShortcut()
 
 	const [raisedHand, setRaisedHand] = useState(false)
 	const speaking = useIsSpeaking(userMedia.audioStreamTrack)
@@ -147,8 +117,8 @@ function JoinedRoom({ bugReportsEnabled }: { bugReportsEnabled: boolean }) {
 
 	useBroadcastStatus({
 		userMedia,
-		peer,
-		signal,
+		partyTracks,
+		websocket,
 		identity,
 		pushedTracks,
 		raisedHand,
@@ -160,136 +130,80 @@ function JoinedRoom({ bugReportsEnabled }: { bugReportsEnabled: boolean }) {
 
 	const { width } = useWindowSize()
 
-	const stageLimit = width < 600 ? 2 : 8
+	const someScreenshare =
+		otherUsers.some((u) => u.tracks.screenShareEnabled) ||
+		Boolean(identity?.tracks.screenShareEnabled)
+	const stageLimit = width < 600 ? 2 : someScreenshare ? 5 : 9
 
 	const { recordActivity, actorsOnStage } = useStageManager(
 		otherUsers,
-		stageLimit
+		stageLimit,
+		identity
 	)
 
 	useEffect(() => {
 		otherUsers.forEach((u) => {
-			if (u.speaking || u.raisedHand || u.tracks.screenShareEnabled)
-				recordActivity(u)
+			if (u.speaking || u.raisedHand) recordActivity(u)
 		})
 	}, [otherUsers, recordActivity])
 
-	const [pinnedId, setPinnedId] = useState<string>()
-
-	const flexContainerWidth = useMemo(
-		() =>
-			100 /
-				calculateLayout({
-					count: totalUsers,
-					height: containerHeight,
-					width: containerWidth,
-				}).cols +
-			'%',
-		[totalUsers, containerHeight, containerWidth]
+	const pinnedActors = actorsOnStage.filter((u) => pinnedTileIds.includes(u.id))
+	const unpinnedActors = actorsOnStage.filter(
+		(u) => !pinnedTileIds.includes(u.id)
 	)
+
+	const gridGap = 12
+	const dispatchToast = useDispatchToast()
+
+	// Re-show the toast whenever the group changes, including when a hidden member is detected, even
+	// if the user dismissed it before
+	const safetyNumber = e2ee?.safetyNumber
+	const memberCount = e2ee?.members.length ?? 0
+	const hiddenMemberCount = e2ee?.hiddenMembers.length ?? 0
+	useEffect(() => {
+		if (safetyNumber) {
+			dispatchToast(
+				<SafetyNumberToast
+					safetyNumber={safetyNumber}
+					memberCount={memberCount}
+					hiddenMemberCount={hiddenMemberCount}
+				/>,
+				{ duration: Infinity, id: 'e2ee-safety-number' }
+			)
+		}
+	}, [safetyNumber, memberCount, hiddenMemberCount, dispatchToast])
 
 	return (
 		<PullAudioTracks
 			audioTracks={otherUsers.map((u) => u.tracks.audio).filter(isNonNullable)}
 		>
 			<div className="flex flex-col h-full bg-white dark:bg-zinc-800">
-				<Flipper
-					flipKey={totalUsers}
-					className="relative flex-grow overflow-hidden isolate"
-				>
+				<div className="relative flex-grow bg-black isolate">
 					<div
-						className="absolute inset-0 h-full w-full bg-black isolate flex flex-wrap justify-around gap-[--gap] p-[--gap]"
-						style={
-							{
-								'--gap': '1rem',
-								// the flex basis that is needed to achieve row layout
-								'--flex-container-width': flexContainerWidth,
-								// the size of the first user's flex container
-								'--participant-max-width': firstFlexChildWidth + 'px',
-							} as any
-						}
-						ref={containerRef}
+						style={{ '--gap': gridGap + 'px' } as any}
+						className="absolute inset-0 flex isolate p-[--gap] gap-[--gap]"
 					>
-						{identity && userMedia.audioStreamTrack && (
-							<Participant
-								user={identity}
-								isSelf
-								flipId={'identity user'}
-								ref={firstFlexChildRef}
-								videoTrack={userMedia.videoStreamTrack}
-								audioTrack={userMedia.audioStreamTrack}
-								pinnedId={pinnedId}
-								setPinnedId={setPinnedId}
-							/>
-						)}
-
-						{identity &&
-							userMedia.screenShareVideoTrack &&
-							userMedia.screenShareEnabled && (
-								<Participant
-									user={identity}
-									flipId={'identity user screenshare'}
-									isSelf
-									isScreenShare
-									videoTrack={userMedia.screenShareVideoTrack}
-									pinnedId={pinnedId}
-									setPinnedId={setPinnedId}
+						{pinnedActors.length > 0 && (
+							<div className="flex-grow-[5] overflow-hidden relative">
+								<ParticipantLayout
+									users={pinnedActors.filter(isNonNullable)}
+									gap={gridGap}
+									aspectRatio="16:9"
 								/>
-							)}
-						{actorsOnStage.map((user) => (
-							<Fragment key={user.id}>
-								<PullVideoTrack
-									video={user.tracks.video}
-									audio={user.tracks.audio}
-								>
-									{({ videoTrack, audioTrack }) => (
-										<Participant
-											user={user}
-											flipId={user.id}
-											videoTrack={videoTrack}
-											audioTrack={audioTrack}
-											pinnedId={pinnedId}
-											setPinnedId={setPinnedId}
-										></Participant>
-									)}
-								</PullVideoTrack>
-								{user.tracks.screenshare && user.tracks.screenShareEnabled && (
-									<PullVideoTrack video={user.tracks.screenshare}>
-										{({ videoTrack }) => (
-											<Participant
-												user={user}
-												videoTrack={videoTrack}
-												flipId={user.id + 'screenshare'}
-												isScreenShare
-												pinnedId={pinnedId}
-												setPinnedId={setPinnedId}
-											/>
-										)}
-									</PullVideoTrack>
-								)}
-							</Fragment>
-						))}
-
-						{identity &&
-							userMedia.audioStreamTrack &&
-							userMedia.videoStreamTrack &&
-							fakeUsers.map((uid) => (
-								<Participant
-									user={identity}
-									isSelf
-									videoTrack={userMedia.videoStreamTrack}
-									audioTrack={userMedia.audioStreamTrack}
-									key={uid}
-									flipId={uid.toString()}
-									pinnedId={pinnedId}
-									setPinnedId={setPinnedId}
-								></Participant>
-							))}
+							</div>
+						)}
+						<div className="flex-grow overflow-hidden relative">
+							<ParticipantLayout
+								users={unpinnedActors.filter(isNonNullable)}
+								gap={gridGap}
+								aspectRatio="4:3"
+							/>
+						</div>
 					</div>
-					<Toast.Viewport />
-				</Flipper>
+					<Toast.Viewport className="absolute bottom-0 right-0" />
+				</div>
 				<div className="flex flex-wrap items-center justify-center gap-2 p-2 text-sm md:gap-4 md:p-5 md:text-base">
-					<GridDebugControls />
+					{hasAiCredentials && <AiButton recordActivity={recordActivity} />}
 					<MicButton warnWhenSpeakingWhileMuted />
 					<CameraButton />
 					<ScreenshareButton />
@@ -303,7 +217,32 @@ function JoinedRoom({ bugReportsEnabled }: { bugReportsEnabled: boolean }) {
 						className="hidden md:block"
 					></ParticipantsButton>
 					<OverflowMenu bugReportsEnabled={bugReportsEnabled} />
-					<LeaveRoomButton />
+					<LeaveRoomButton
+						navigateToFeedbackPage={hasDb}
+						meetingId={meetingId}
+					/>
+					{showDebugInfo && meetingId && (
+						<CopyButton contentValue={meetingId}>Meeting Id</CopyButton>
+					)}
+					{showDebugInfo && meetingId && dashboardDebugLogsBaseUrl && (
+						<ButtonLink
+							className="text-xs"
+							displayType="secondary"
+							to={dashboardLogsLink(dashboardDebugLogsBaseUrl, [
+								{
+									id: '2',
+									key: 'meetingId',
+									type: 'string',
+									value: meetingId,
+									operation: 'eq',
+								},
+							])}
+							target="_blank"
+							rel="noreferrer"
+						>
+							Meeting Logs
+						</ButtonLink>
+					)}
 				</div>
 			</div>
 			<HighPacketLossWarningsToast />

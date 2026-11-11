@@ -1,6 +1,6 @@
-import { redirect } from '@remix-run/cloudflare'
 import { commitSession, getSession } from '~/session'
 import { ACCESS_AUTHENTICATED_USER_EMAIL_HEADER } from './constants'
+import { safeRedirect } from './safeReturnUrl'
 
 export async function setUsername(
 	username: string,
@@ -9,7 +9,7 @@ export async function setUsername(
 ) {
 	const session = await getSession(request.headers.get('Cookie'))
 	session.set('username', username)
-	throw redirect(returnUrl, {
+	throw safeRedirect(returnUrl, {
 		headers: {
 			'Set-Cookie': await commitSession(session),
 		},

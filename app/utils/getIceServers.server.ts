@@ -1,13 +1,13 @@
-import type { AppLoadContext } from '@remix-run/cloudflare'
+import type { Env } from '~/types/Env'
 
 export async function getIceServers({
 	TURN_SERVICE_ID,
 	TURN_SERVICE_TOKEN,
-}: AppLoadContext): Promise<undefined | RTCIceServer[]> {
+}: Env): Promise<undefined | RTCIceServer[]> {
 	if (TURN_SERVICE_TOKEN === undefined || TURN_SERVICE_ID === undefined) return
 
 	return fetch(
-		`https://rtc.live.cloudflare.com/v1/turn/keys/${TURN_SERVICE_ID}/credentials/generate`,
+		`https://rtc.live.cloudflare.com/v1/turn/keys/${TURN_SERVICE_ID}/credentials/generate-ice-servers`,
 		{
 			method: 'POST',
 			body: JSON.stringify({ ttl: 86400 }),
@@ -19,8 +19,8 @@ export async function getIceServers({
 		.then(
 			(res) =>
 				res.json() as Promise<{
-					iceServers: RTCIceServer
+					iceServers: RTCIceServer[]
 				}>
 		)
-		.then(({ iceServers }) => [iceServers])
+		.then(({ iceServers }) => iceServers)
 }

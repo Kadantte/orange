@@ -1,9 +1,10 @@
 import { useOutletContext } from '@remix-run/react'
+import type { PartyTracks } from 'partytracks/client'
 import type { Dispatch, SetStateAction } from 'react'
+import type { E2eeStatus } from '~/hooks/useE2eeStatus'
 import type { UserMedia } from '~/hooks/useUserMedia'
-import type Peer from '~/utils/Peer.client'
-import type { PeerDebugInfo } from '~/utils/Peer.client'
 import type useRoom from './useRoom'
+import type { useRoomHistory } from './useRoomHistory'
 
 export type RoomContextType = {
 	traceLink?: string
@@ -11,11 +12,23 @@ export type RoomContextType = {
 	userDirectoryUrl?: string
 	joined: boolean
 	setJoined: Dispatch<SetStateAction<boolean>>
+	pinnedTileIds: string[]
+	setPinnedTileIds: Dispatch<SetStateAction<string[]>>
+	showDebugInfo: boolean
+	setShowDebugInfo: Dispatch<SetStateAction<boolean>>
+	audioOnlyMode: boolean
+	setAudioOnlyMode: Dispatch<SetStateAction<boolean>>
+	dataSaverMode: boolean
+	setDataSaverMode: Dispatch<SetStateAction<boolean>>
 	userMedia: UserMedia
-	peer: Peer | null
-	peerDebugInfo?: PeerDebugInfo
+	partyTracks: PartyTracks
 	iceConnectionState: RTCIceConnectionState
 	room: ReturnType<typeof useRoom>
+	roomHistory: ReturnType<typeof useRoomHistory>
+	simulcastEnabled: boolean
+	/** E2EE group state, if E2EE is enabled and this user is in the MLS group */
+	e2ee?: E2eeStatus
+	e2eeOnJoin: (firstUser: boolean) => void
 	pushedTracks: {
 		video?: string
 		audio?: string

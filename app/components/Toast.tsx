@@ -8,6 +8,8 @@ import {
 } from 'react'
 import { style } from '~/utils/style'
 
+import { nanoid } from 'nanoid'
+
 export const Root = style(
 	Toast.Root,
 	'bg-white rounded dark:bg-zinc-500 shadow p-3 text-zinc-800 dark:text-zinc-50'
@@ -21,19 +23,19 @@ interface Notification {
 
 const NotificationToasts = createContext([
 	[] as Notification[],
-	(_content: ReactNode, _options?: { duration?: number }) => {},
+	(_content: ReactNode, _options?: { duration?: number; id?: string }) => {},
 ] as const)
 
 export const NotificationToastsProvider = (props: { children?: ReactNode }) => {
 	const [messages, setMessages] = useState<Notification[]>([])
 
 	const dispatch = useCallback(
-		(content: ReactNode, options?: { duration?: number }) =>
+		(content: ReactNode, options?: { duration?: number; id?: string }) =>
 			setMessages((ms) => [
-				...ms,
+				...ms.filter((m) => m.id !== options?.id),
 				{
 					...options,
-					id: crypto.randomUUID(),
+					id: options?.id ?? nanoid(14),
 					content,
 				},
 			]),
